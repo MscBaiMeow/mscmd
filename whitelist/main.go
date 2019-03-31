@@ -186,12 +186,7 @@ func setMyID(qq QQ, ID string) {
 	} else if ok {
 		//取消该QQ之前绑定的ID的白名单
 		whitelistRemove(dbID)
-
-		groupMsg(fmt.Sprintf("%v 放弃 %s , 绑定 %s", qq, dbID, ID))
-	} else {
-		groupMsg(fmt.Sprintf("%v 绑定 %v", qq, ID))
 	}
-
 	whitelistAdd(qq, ID)
 }
 
@@ -240,6 +235,7 @@ RETRY:
 		goto RETRY
 	} else {
 		log.Println(res)
+		groupMsg(fmtFliter.ReplaceAllString(res, ""))
 	}
 }
 
@@ -260,8 +256,11 @@ RETRY:
 		goto RETRY
 	} else {
 		log.Println(res)
+		groupMsg(fmtFliter.ReplaceAllString(res, ""))
 	}
 }
+
+var fmtFliter, _ = regexp.Compile("§.")
 
 func groupMsg(msg string) {
 	type params struct {
@@ -269,7 +268,7 @@ func groupMsg(msg string) {
 		Message string `json:"message"`
 		AutoEsc bool   `json:"auto_escape"`
 	}
-
+RETRY:
 	if err := ws.WriteJSON(struct {
 		Action string `json:"action"`
 		Params params `json:"params"`
@@ -285,6 +284,7 @@ func groupMsg(msg string) {
 		if err := openCoolQ(); err != nil {
 			log.Fatal("重新连接酷Q失败", err)
 		}
+		goto RETRY
 	}
 }
 
