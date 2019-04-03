@@ -100,6 +100,7 @@ func main() {
 	}
 }
 
+//从酷Q接收消息
 func reciveCoolQ(v interface{}) {
 RETRY:
 	err := ws.ReadJSON(v)
@@ -113,6 +114,7 @@ RETRY:
 	}
 }
 
+//打开数据库
 func openDatabase() (err error) {
 	//open database
 	log.Println("正在准备数据库")
@@ -123,6 +125,7 @@ func openDatabase() (err error) {
 	return
 }
 
+//连接mc服务器
 func openRCON() (err error) {
 	//open rcon
 	log.Println("正在连接RCON")
@@ -130,6 +133,7 @@ func openRCON() (err error) {
 	return
 }
 
+//连接酷Q
 func openCoolQ() (err error) {
 	log.Println("正在连接酷Q")
 	URL := &url.URL{
@@ -150,9 +154,9 @@ var (
 	selectQQ        *sql.Stmt
 	addWhitelist    *sql.Stmt
 	removeWhitelist *sql.Stmt
-	listWhitelist   *sql.Stmt
 )
 
+//编译SQL语句
 func prepare() (err error) {
 	if selectID, err = db.Prepare("SELECT QQ FROM `whitelist` WHERE ID=?"); err != nil {
 		return
@@ -164,9 +168,6 @@ func prepare() (err error) {
 		return
 	}
 	if removeWhitelist, err = db.Prepare("DELETE FROM `whitelist` WHERE ID=?"); err != nil {
-		return
-	}
-	if listWhitelist, err = db.Prepare("SELECT QQ,ID FROM `whitelist`"); err != nil {
 		return
 	}
 	return
