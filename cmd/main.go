@@ -172,8 +172,9 @@ var fmtFliter, _ = regexp.Compile("§.")
 
 func command(QQ uint64, msg string) {
 	level := getLevel(QQ)
-	if strings.HasPrefix(msg, "sudo:") ||
-		strings.HasPrefix(msg, "rcon:") {
+	switch {
+	case strings.HasPrefix(msg, "sudo:"),
+		strings.HasPrefix(msg, "rcon:"):
 		if level >= 90 {
 			log.Println(QQ, msg)
 			msg := msg[5:]
@@ -181,7 +182,13 @@ func command(QQ uint64, msg string) {
 		} else {
 			sendMsg(invokedMsg(level, 90))
 		}
-	} else if strings.HasPrefix(msg, "list") {
+	case strings.HasPrefix(msg, "info:"):
+		if level >= 30 {
+			sendMsg(checkInfo(msg[5:]))
+		} else {
+			sendMsg(invokedMsg(level, 30))
+		}
+	case strings.HasPrefix(msg, "list"):
 		if level >= 0 {
 			rconCmd("list")
 		} else {
@@ -192,6 +199,53 @@ func command(QQ uint64, msg string) {
 
 func invokedMsg(level, need int) string {
 	return fmt.Sprintf("invoking rejected, your permission level %d, need %d", level, need)
+}
+
+func checkInfo(cmd string) string {
+	if strings.HasPrefix(cmd, "name:") {
+		qq, has, err := getQQbyID(cmd[5:])
+		if err != nil {
+			return err.Error()
+		} else if !has {
+			return "none"
+		} else {
+			return fmt.Sprintf("[CQ:at,qq=%d]", qq)
+		}
+	}
+	var qq uint64
+	if n, err := fmt.Sscanf(cmd, "[CQ:at,qq=%d]", &qq); n == 1 || err == nil {
+		id, has, err := getIDbyQQ(qq)
+		if err != nil {
+			return err.Error()
+		} else if !has {
+			return "none"
+		} else {
+			return id
+		}
+	}
+	return ""
+}
+
+func getIDbyQQ(qq uint64) (ID string, has bool, err error) {
+	var rows *sql.Rows
+	if rows, err = db.Query("SELECT ID FROM `whitelist` WHERE QQ=?", qq); err != nil {
+		return
+	} else if rows.Next() {
+		has = true
+		err = rows.Scan(&ID)
+	}
+	return
+}
+
+func getQQbyID(ID string) (qq uint64, has bool, err error) {
+	var rows *sql.Rows
+	if rows, err = db.Query("SELECT QQ FROM `whitelist` WHERE ID=?", ID); err != nil {
+		return
+	} else if rows.Next() {
+		has = true
+		err = rows.Scan(&qq)
+	}
+	return
 }
 
 func rconCmd(cmd string) {
