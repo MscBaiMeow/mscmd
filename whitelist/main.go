@@ -24,10 +24,13 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
+	"github.com/miaoscraft/mojang"
 	"github.com/micvbang/pocketmine-rcon"
+	"github.com/satori/go.uuid"
 )
 
 //GroupID 是要接受消息的群号
@@ -43,7 +46,7 @@ var pswdRCON = flag.String("rcon-pswd", "", "RCON密码")
 var wsAddr = flag.String("websocket-addr", "", "酷Q WebsocketAPI地址")
 var wsBearer = flag.String("websocket-bearer", "", "酷Q WebsocketAPI验证码")
 
-var idMatcher, _ = regexp.Compile(`\w{3,16}`)
+var idMatcher = regexp.MustCompile(`\w{3,16}`)
 
 func main() {
 	log.Println("喵喵公馆专用")
@@ -51,9 +54,6 @@ func main() {
 
 	if err := openDatabase(); err != nil {
 		log.Fatal("打开数据库失败", err)
-	}
-	if err := prepare(); err != nil {
-		log.Fatal("准备查询语句失败", err)
 	}
 	if err := openRCON(); err != nil {
 		log.Fatal("连接RCON失败", err)
@@ -78,9 +78,10 @@ func main() {
 				}
 				//玩家主动加白名
 				qq := QQ(event["user_id"].(float64))
-
 				if ID == idMatcher.FindString(ID) {
-					setMyID(qq, ID)
+					if err := setMyID(qq, ID); err != nil {
+						groupMsg(err.Error())
+					}
 				}
 			}
 		case "notice":
@@ -89,11 +90,11 @@ func main() {
 				uint64(event["group_id"].(float64)) == GroupID {
 				//有人退群或被踢时要删除他的白名单
 				qq := QQ(event["user_id"].(float64))
-				if ID, ok, err := getIDbyQQ(qq); err != nil {
+				if name, uuid, ok, err := getOwned(qq); err != nil {
 					log.Fatalf("查询QQ%d失败: %v", qq, err)
 				} else if ok {
-					whitelistRemove(ID)
-					groupMsg(fmt.Sprintf("释放由 %v 申请的 %s", qq, ID))
+					whitelistRemove(name, uuid)
+					groupMsg(fmt.Sprintf("释放由 %v 申请的 %s", qq, name))
 				}
 			}
 		}
@@ -149,46 +150,58 @@ func openCoolQ() (err error) {
 	return
 }
 
-var (
-	selectID        *sql.Stmt
-	selectQQ        *sql.Stmt
-	addWhitelist    *sql.Stmt
-	removeWhitelist *sql.Stmt
-)
+//当Q群里一个人用MyID=?来设置白名单的时候此函数被调用
+func setMyID(qq QQ, name string) error {
+	nu, err := mojang.GetUUID(name, time.Now())
+	if err != nil {
+		return fmt.Errorf("向Mojang查询UUID失败: %v", err)
+	}
+	if dbqq, ok, err := getOwner(nu.ToUUID()); err != nil {
+		return fmt.Errorf("从数据库检查UUID%s失败: %v", nu.UUID, err)
+	} else if ok && dbqq != qq {
+		//已经有其他人占用这个ID了
+		return fmt.Errorf("%s 占用着 %s, %s 没有得逞", dbqq, nu.Name, qq)
+	}
 
-//编译SQL语句
-func prepare() (err error) {
-	if selectID, err = db.Prepare("SELECT QQ FROM `whitelist` WHERE ID=?"); err != nil {
+	if name, uuid, ok, err := getOwned(qq); err != nil {
+		return fmt.Errorf("查询QQ%v失败: %v", qq, err)
+	} else if ok {
+		//取消该QQ之前绑定的ID的白名单
+		whitelistRemove(name, uuid)
+	}
+	whitelistAdd(qq, nu.Name, nu.ToUUID())
+	return nil
+}
+
+func getOwner(UUID uuid.UUID) (qq QQ, ok bool, err error) {
+	var rows *sql.Rows
+	if rows, err = db.Query("SELECT QQ FROM `whitelist` WHERE UUID=?", UUID.Bytes()); err != nil {
 		return
 	}
-	if selectQQ, err = db.Prepare("SELECT ID FROM `whitelist` WHERE QQ=?"); err != nil {
-		return
-	}
-	if addWhitelist, err = db.Prepare("INSERT INTO `whitelist` (`QQ`, `ID`, `Time`) VALUES (?, ?, CURRENT_DATE())"); err != nil {
-		return
-	}
-	if removeWhitelist, err = db.Prepare("DELETE FROM `whitelist` WHERE ID=?"); err != nil {
-		return
+	if rows.Next() {
+		ok = true
+		err = rows.Scan(&qq)
 	}
 	return
 }
 
-func setMyID(qq QQ, ID string) {
-	if dbQQ, ok, err := getQQbyID(ID); err != nil {
-		log.Fatalf("查询ID%s失败: %v", ID, err)
-	} else if ok && dbQQ != qq {
-		//已经有其他人占用这个ID了
-		groupMsg(fmt.Sprintf(" %s 占用着 %s, %s 没有得逞", dbQQ, ID, qq))
+func getOwned(qq QQ) (name string, uuid uuid.UUID, ok bool, err error) {
+	var rows *sql.Rows
+	if rows, err = db.Query("SELECT ID,UUID FROM `whitelist` WHERE QQ=?", qq); err != nil {
 		return
 	}
+	if rows.Next() {
+		ok = true
+		var buid []byte
 
-	if dbID, ok, err := getIDbyQQ(qq); err != nil {
-		log.Fatalf("查询QQ%v失败: %v", qq, err)
-	} else if ok {
-		//取消该QQ之前绑定的ID的白名单
-		whitelistRemove(dbID)
+		if err = rows.Scan(&name, &buid); err != nil {
+			return
+		}
+		if err = uuid.UnmarshalBinary(buid); err != nil {
+			return
+		}
 	}
-	whitelistAdd(qq, ID)
+	return
 }
 
 var (
@@ -197,39 +210,16 @@ var (
 	rconConn *rcon.Connection
 )
 
-func getIDbyQQ(qq QQ) (ID string, has bool, err error) {
-	var rows *sql.Rows
-	if rows, err = selectQQ.Query(uint64(qq)); err != nil {
-		return
-	} else if rows.Next() {
-		has = true
-		err = rows.Scan(&ID)
-	}
-	return
-}
-
-func getQQbyID(ID string) (qq QQ, has bool, err error) {
-	var rows *sql.Rows
-	if rows, err = selectID.Query(ID); err != nil {
-		return
-	} else if rows.Next() {
-		has = true
-		err = rows.Scan(&qq)
-	}
-	return
-}
-
-func whitelistRemove(ID string) {
-	log.Println("删除白名单", ID)
+func whitelistRemove(Name string, UUID uuid.UUID) {
 	//删除数据库数据
-	if _, err := removeWhitelist.Exec(ID); err != nil {
+	if _, err := db.Exec("DELETE FROM `whitelist` WHERE UUID=?", UUID.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 	//删除服务器端白名单
 RETRY:
-	if res, err := rconConn.SendCommand("whitelist remove " + ID); err != nil {
+	if res, err := rconConn.SendCommand("whitelist remove " + UUID.String()); err != nil {
 		log.Println("删除白名单失败", err)
-		//这里尝试重现连接RCON
+		//这里尝试重新连接RCON
 		if err := openRCON(); err != nil {
 			log.Fatalf("连接RCON失败: %v\n", err)
 		}
@@ -240,10 +230,11 @@ RETRY:
 	}
 }
 
-func whitelistAdd(qq QQ, ID string) {
-	log.Println("添加白名单", qq, ID)
+func whitelistAdd(qq QQ, ID string, UUID uuid.UUID) {
 	//更新数据库
-	if _, err := addWhitelist.Exec(uint64(qq), ID); err != nil {
+	if _, err := db.Exec(
+		"INSERT INTO `whitelist` (`QQ`, `ID`,`UUID`, `Time`) VALUES (?, ?, ?, CURRENT_DATE())",
+		qq, ID, UUID.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 	//向服务器提交白名单
@@ -261,7 +252,7 @@ RETRY:
 	}
 }
 
-var fmtFliter, _ = regexp.Compile("§.")
+var fmtFliter = regexp.MustCompile("§.")
 
 func groupMsg(msg string) {
 	type params struct {
