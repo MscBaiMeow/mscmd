@@ -194,6 +194,12 @@ func command(QQ uint64, msg string) {
 		} else {
 			sendMsg(invokedMsg(level, 0))
 		}
+	case strings.HasPrefix(msg, "ping"):
+		if level >= 0 {
+			sendMsg("pong")
+		} else {
+			sendMsg(invokedMsg(level, 0))
+		}
 	}
 }
 
