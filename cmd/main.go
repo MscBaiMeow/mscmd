@@ -5,6 +5,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -12,14 +13,21 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"text/template"
+	"time"
 
+	"github.com/Tnze/go-mc/bot"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
 	"github.com/micvbang/pocketmine-rcon"
 )
 
-//GroupID 是要接受消息的群号
-const GroupID = 609632487
+const (
+	//GroupID 是要接受消息的群号
+	GroupID = 609632487
+	//ServerIP 是Ping服务器地址
+	ServerIP = "play.miaoscraft.cn"
+)
 
 var dbUser = flag.String("db-user", "", "Mysql数据库用户名")
 var dbPswd = flag.String("db-pswd", "", "Mysql数据库密码")
@@ -196,7 +204,7 @@ func command(QQ uint64, msg string) {
 		}
 	case strings.HasPrefix(msg, "ping"):
 		if level >= 0 {
-			sendMsg("pong")
+			ping()
 		} else {
 			sendMsg(invokedMsg(level, 0))
 		}
@@ -271,3 +279,49 @@ RETRY:
 		}
 	}
 }
+
+func ping() {
+	respjson, delay, err := bot.PingAndList(ServerIP, 25565)
+	if err != nil {
+		sendMsg("Ping fail: " + err.Error())
+		return
+	}
+
+	var resp struct {
+		Version struct {
+			Name     string `json:"name"`
+			Protocol int    `json:"protocol"`
+		} `json:"version"`
+		Players struct {
+			Max    int `json:"max"`
+			Online int `json:"online"`
+			Sample []struct {
+				Name string `json:"name"`
+				ID   string `json:"id"`
+			} `json:"sample"`
+		} `json:"players"`
+		Description struct {
+			Text string `json:"text"`
+		} `json:"description"`
+		Delay time.Duration `json:"-"`
+	}
+	resp.Delay = delay
+	if err := json.Unmarshal(respjson, &resp); err != nil {
+		sendMsg("Ping fail: " + err.Error())
+		return
+	}
+
+	var respStr strings.Builder
+	if err := pingResp.Execute(&respStr, resp); err != nil {
+		sendMsg("Ping fail: " + err.Error())
+		return
+	}
+	sendMsg(respStr.String())
+}
+
+var pingResp = template.Must(template.New("pingResp").Parse(
+	`服务器:{{ .Version.Name }}
+{{ .Description.Text }}
+延迟:{{ .Delay }}
+人数:{{ .Players.Online }}/{{ .Players.Max }}{{ range .Players.Sample }}
+[{{ .Name }}]{{ end }}`))
