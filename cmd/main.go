@@ -29,17 +29,20 @@ const (
 	ServerIP = "play.miaoscraft.cn"
 )
 
-var dbUser = flag.String("db-user", "", "Mysql数据库用户名")
-var dbPswd = flag.String("db-pswd", "", "Mysql数据库密码")
-var dbAddr = flag.String("db-addr", "", "Mysql数据库地址")
+var (
+	dbUser = flag.String("db-user", "", "Mysql数据库用户名")
+	dbPswd = flag.String("db-pswd", "", "Mysql数据库密码")
+	dbAddr = flag.String("db-addr", "", "Mysql数据库地址")
 
-var addrRCON = flag.String("rcon-addr", "", "RCON地址")
-var pswdRCON = flag.String("rcon-pswd", "", "RCON密码")
+	addrRCON = flag.String("rcon-addr", "", "RCON地址")
+	pswdRCON = flag.String("rcon-pswd", "", "RCON密码")
 
-var wsAddr = flag.String("websocket-addr", "", "酷Q WebsocketAPI地址")
-var wsBearer = flag.String("websocket-bearer", "", "酷Q WebsocketAPI验证码")
+	wsAddr   = flag.String("websocket-addr", "", "酷Q WebsocketAPI地址")
+	wsBearer = flag.String("websocket-bearer", "", "酷Q WebsocketAPI验证码")
+	httpAddr = flag.String("http-addr", "", "酷Q HttpAPI地址")
 
-var idMatcher, _ = regexp.Compile(`\w{3,16}`)
+	idMatcher, _ = regexp.Compile(`\w{3,16}`)
+)
 
 func main() {
 	log.Println("喵喵公馆专用")
@@ -54,6 +57,9 @@ func main() {
 	if err := openRCON(); err != nil {
 		log.Fatal("连接RCON失败", err)
 	}
+	if err := getLoginInfo(); err != nil {
+		log.Fatal("获取酷Q登录号失败", err)
+	}
 	if err := openCoolQ(); err != nil {
 		log.Fatal("连接酷Q失败", err)
 	}
@@ -67,8 +73,9 @@ func main() {
 				event["group_id"] == GroupID {
 				QQ := uint64(event["user_id"].(float64))
 				msg := event["raw_message"].(string)
-				if strings.HasPrefix(msg, "msc:") {
-					command(QQ, msg[len("msc:"):])
+				pf := fmt.Sprintf("[CQ:at,qq=%d] :", botQQ)
+				if strings.HasPrefix(msg, pf) {
+					command(QQ, msg[len(pf):])
 				}
 			}
 		}
@@ -117,13 +124,10 @@ func openCoolQ() (err error) {
 		"Authorization": []string{"Bearer " + *wsBearer},
 	}
 
+	//连接event接口
 	ws, _, err = websocket.DefaultDialer.Dial(URL.String(), Header)
 	return
 }
-
-var (
-	selectQQ *sql.Stmt
-)
 
 func prepare() (err error) {
 	if selectQQ, err = db.Prepare("SELECT PermissionLevel FROM `magicians` WHERE QQ=?"); err != nil {
@@ -133,9 +137,12 @@ func prepare() (err error) {
 }
 
 var (
+	selectQQ *sql.Stmt
 	db       *sql.DB
 	ws       *websocket.Conn
 	rconConn *rcon.Connection
+
+	botQQ int64
 )
 
 func sendMsg(msg string) {
@@ -163,6 +170,47 @@ func sendMsg(msg string) {
 	}
 }
 
+func getLoginInfo() error {
+	URL := &url.URL{
+		Scheme: "http",
+		Host:   *httpAddr,
+		Path:   "get_login_info",
+	}
+	req, err := http.NewRequest("GET", URL.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header = http.Header{
+		"Authorization": []string{"Bearer " + *wsBearer},
+	}
+
+	resp, err := new(http.Client).Do(req)
+	if err != nil {
+		return err
+	}
+
+	var respData struct {
+		ErrorCode int `json:"retcode"`
+		Data      struct {
+			ID       int64  `json:"user_id"`
+			NickName string `json:"nickname"`
+		} `json:"data"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&respData)
+	if err != nil {
+		return err
+	}
+	if respData.ErrorCode != 0 {
+		return fmt.Errorf("酷Q API调用出错: %d", respData.ErrorCode)
+	}
+
+	log.Println("机器人QQ:", respData.Data.ID)
+	log.Println("机器人昵称:", respData.Data.NickName)
+
+	botQQ = respData.Data.ID
+	return nil
+}
+
 //从数据库读取用户的等级，默认为0
 func getLevel(QQ uint64) (level int) {
 	if rows, err := selectQQ.Query(QQ); err != nil {
@@ -181,11 +229,10 @@ var fmtFliter, _ = regexp.Compile("§.")
 func command(QQ uint64, msg string) {
 	level := getLevel(QQ)
 	switch {
-	case strings.HasPrefix(msg, "sudo:"),
-		strings.HasPrefix(msg, "rcon:"):
+	case strings.HasPrefix(msg, "mcmd:"):
 		if level >= 90 {
 			log.Println(QQ, msg)
-			msg := msg[5:]
+			msg := msg[len("sudo:"):]
 			rconCmd(msg)
 		} else {
 			sendMsg(invokedMsg(level, 90))
@@ -324,4 +371,5 @@ var pingResp = template.Must(template.New("pingResp").Parse(
 {{ .Description.Text }}
 延迟:{{ .Delay }}
 人数:{{ .Players.Online }}/{{ .Players.Max }}{{ range .Players.Sample }}
-[{{ .Name }}]{{ end }}`))
+[{{ .Name }}]{{ end }}`,
+))
