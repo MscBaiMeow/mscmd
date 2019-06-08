@@ -247,11 +247,17 @@ func command(QQ uint64, msg string) {
 		if level >= 0 {
 			rconCmd("list")
 		} else {
-			sendMsg(invokedMsg(level, 0))
+			sendMsg(invokedMsg(level, 0)) 
 		}
 	case strings.HasPrefix(msg, "ping"):
 		if level >= 0 {
 			ping()
+		} else {
+			sendMsg(invokedMsg(level, 0))
+		}
+	case strings.HasPrefix(msg,"ttps"):
+		if level >= 0 {
+			rconCmd("tps")
 		} else {
 			sendMsg(invokedMsg(level, 0))
 		}
@@ -319,7 +325,7 @@ RETRY:
 		}
 		goto RETRY //retry
 	} else {
-		res = strings.Trim(res, " \n")
+		res = strings.TrimRight(res, " \000\n")
 		log.Println(res)
 		if res != "" {
 			sendMsg(fmtFliter.ReplaceAllString(res, ""))
