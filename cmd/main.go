@@ -261,6 +261,12 @@ func command(QQ uint64, msg string) {
 		} else {
 			sendMsg(invokedMsg(level, 0))
 		}
+	case strings.HasPrefix(msg, "tps"):
+		 if level >= 0 {
+			 rconCmd("tps")
+		 } else {
+			 sendMsg(invokedMsg(level, 0))
+		 }
 	}
 }
 
